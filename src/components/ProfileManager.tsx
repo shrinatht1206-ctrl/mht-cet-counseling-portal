@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { StudentProfile } from '../types'
 import { fetchProfiles, deleteProfile } from '../lib/supabase'
-import { Plus, Trash2, Edit3, User, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, FileEdit as Edit3, User, ChevronRight } from 'lucide-react'
 
 interface ProfileManagerProps {
   onSelect: (p: StudentProfile) => void
