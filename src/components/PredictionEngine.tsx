@@ -1,8 +1,9 @@
 import { useState, useMemo, useCallback, Fragment } from 'react'
-import { StudentProfile, CutoffRecord, PredictionRow, SEAT_TYPES } from '../types'
-import { ArrowLeft, Sliders, Download, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp } from 'lucide-react'
+import { StudentProfile, CutoffRecord, PredictionRow, BRANCH_CLUSTERS } from '../types'
+import { ArrowLeft, Sliders, Download, FileText, TrendingUp, TrendingDown, Minus, ChevronDown, ChevronUp, X, RotateCcw, Cpu, Zap, Activity } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import TrendChart from './TrendChart'
+import { generateParentSummaryPDF } from '../services/PdfExportService'
 
 interface PredictionEngineProps {
   profile: StudentProfile
@@ -12,40 +13,66 @@ interface PredictionEngineProps {
   onBack: () => void
 }
 
-export default function PredictionEngine({ profile, records, cities, branches, onBack }: PredictionEngineProps) {
+export default function PredictionEngine({ profile, records, cities, branches: _branches, onBack }: PredictionEngineProps) {
   const [offset, setOffset] = useState(0)
   const [selectedSeatTypes, setSelectedSeatTypes] = useState<string[]>(profile.seat_types || [])
-  const [selectedCities, setSelectedCities] = useState<string[]>(profile.preferred_cities || [])
+  const [selectedCity, setSelectedCity] = useState<string>('')
+  const [selectedCollege, setSelectedCollege] = useState<string>('')
+  const [selectedBranch, setSelectedBranch] = useState<string>('')
   const [selectedBranches, setSelectedBranches] = useState<string[]>(profile.preferred_branches || [])
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
   const [showFilters, setShowFilters] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [modalRow, setModalRow] = useState<PredictionRow | null>(null)
 
   const studentPercentile = useMemo(() => {
     if (selectedSeatTypes.includes('AI')) return profile.jee_percentile
     return profile.mht_cet_percentile
   }, [profile, selectedSeatTypes])
 
-  const filteredRecords = useMemo(() => {
+  const cityFilteredRecords = useMemo(() => {
     return records.filter((r) => {
-      if (selectedSeatTypes.length > 0 && !selectedSeatTypes.includes(r.Seat_Type)) return false
-      if (selectedCities.length > 0 && !selectedCities.includes(r.City)) return false
-      if (selectedBranches.length > 0 && !selectedBranches.includes(r.Branch)) return false
+      if (selectedSeatTypes.length > 0 && !selectedSeatTypes.includes(r.seat_type)) return false
+      if (selectedCity && r.city !== selectedCity) return false
+      if (selectedCollege && r.college_name !== selectedCollege) return false
+      if (selectedBranches.length > 0 && !selectedBranches.includes(r.branch_name)) return false
       return true
     })
-  }, [records, selectedSeatTypes, selectedCities, selectedBranches])
+  }, [records, selectedSeatTypes, selectedCity, selectedCollege, selectedBranches])
+
+  const availableColleges = useMemo(() => {
+    const s = new Set<string>()
+    for (const r of records) {
+      if (selectedSeatTypes.length > 0 && !selectedSeatTypes.includes(r.seat_type)) continue
+      if (selectedCity && r.city !== selectedCity) continue
+      s.add(r.college_name)
+    }
+    return Array.from(s).sort()
+  }, [records, selectedSeatTypes, selectedCity])
+
+  const availableBranches = useMemo(() => {
+    const s = new Set<string>()
+    for (const r of records) {
+      if (selectedSeatTypes.length > 0 && !selectedSeatTypes.includes(r.seat_type)) continue
+      if (selectedCity && r.city !== selectedCity) continue
+      if (selectedCollege && r.college_name !== selectedCollege) continue
+      s.add(r.branch_name)
+    }
+    return Array.from(s).sort()
+  }, [records, selectedSeatTypes, selectedCity, selectedCollege])
 
   const grouped = useMemo(() => {
     const map = new Map<string, PredictionRow>()
-    for (const r of filteredRecords) {
-      const key = `${r.College_Code}|${r.Branch}|${r.Seat_Type}`
+    for (const r of cityFilteredRecords) {
+      const key = `${r.college_code}|${r.branch_name}|${r.seat_type}`
       if (!map.has(key)) {
         map.set(key, {
-          collegeCode: r.College_Code,
-          collegeName: r.College_Name,
-          city: r.City,
-          branch: r.Branch,
-          seatType: r.Seat_Type,
-          examType: r.Exam_Type,
+          college_code: r.college_code,
+          college_name: r.college_name,
+          city: r.city,
+          branch_name: r.branch_name,
+          seat_type: r.seat_type,
+          exam_type: r.exam_type || '',
           cutoff2022: null,
           cutoff2023: null,
           cutoff2024: null,
@@ -54,14 +81,17 @@ export default function PredictionEngine({ profile, records, cities, branches, o
           avgCutoff: null,
           diff: null,
           tier: 'target',
+          volatility: 0,
+          highVolatility: false,
+          choice_code: r.choice_code,
         })
       }
       const row = map.get(key)!
-      const val = r.Cutoff_Percentile
-      if (r.Year === '2022') row.cutoff2022 = val
-      if (r.Year === '2023') row.cutoff2023 = val
-      if (r.Year === '2024') row.cutoff2024 = val
-      if (r.Year === '2025') row.cutoff2025 = val
+      const val = r.cutoff_percentile
+      if (r.year === 2022) row.cutoff2022 = val
+      if (r.year === 2023) row.cutoff2023 = val
+      if (r.year === 2024) row.cutoff2024 = val
+      if (r.year === 2025) row.cutoff2025 = val
     }
     const arr = Array.from(map.values())
     for (const row of arr) {
@@ -72,17 +102,23 @@ export default function PredictionEngine({ profile, records, cities, branches, o
       const adjusted = row.avgCutoff + offset
       row.diff = studentPercentile - adjusted
       if (row.diff !== null) {
-        if (row.diff < -2.0) row.tier = 'dream'
-        else if (row.diff >= -2.0 && row.diff <= 2.0) row.tier = 'target'
+        if (row.diff < 0) row.tier = 'dream'
+        else if (row.diff <= 2.0) row.tier = 'target'
         else row.tier = 'safe'
+      }
+      if (vals.length >= 2) {
+        const min = Math.min(...vals)
+        const max = Math.max(...vals)
+        row.volatility = max - min
+        row.highVolatility = row.volatility > 1.0
       }
     }
     return arr.filter((r) => r.avgCutoff !== null)
-  }, [filteredRecords, studentPercentile, offset])
+  }, [cityFilteredRecords, studentPercentile, offset])
 
-  const dreamRows = useMemo(() => grouped.filter((r) => r.tier === 'dream').sort((a, b) => (b.avgCutoff! - a.avgCutoff!)), [grouped])
-  const targetRows = useMemo(() => grouped.filter((r) => r.tier === 'target').sort((a, b) => (b.avgCutoff! - a.avgCutoff!)), [grouped])
-  const safeRows = useMemo(() => grouped.filter((r) => r.tier === 'safe').sort((a, b) => (b.avgCutoff! - a.avgCutoff!)), [grouped])
+  const dreamRows = useMemo(() => grouped.filter((r) => r.tier === 'dream').sort((a, b) => (b.avgCutoff! - a.avgCutoff!)).slice(0, 15), [grouped])
+  const targetRows = useMemo(() => grouped.filter((r) => r.tier === 'target').sort((a, b) => (b.avgCutoff! - a.avgCutoff!)).slice(0, 35), [grouped])
+  const safeRows = useMemo(() => grouped.filter((r) => r.tier === 'safe').sort((a, b) => (b.avgCutoff! - a.avgCutoff!)).slice(0, 20), [grouped])
 
   const handleExport = useCallback(() => {
     const data: any[] = []
@@ -91,15 +127,17 @@ export default function PredictionEngine({ profile, records, cities, branches, o
       rows.forEach((r) => {
         data.push({
           Tier: label,
-          'College Code': r.collegeCode,
-          'College Name': r.collegeName,
+          'College Code': r.college_code,
+          'College Name': r.college_name,
           City: r.city,
-          Branch: r.branch,
-          'Seat Type': r.seatType,
+          Branch: r.branch_name,
+          'Seat Type': r.seat_type,
           'Avg Cutoff': r.avgCutoff?.toFixed(4),
           'Latest Cutoff': r.latestCutoff?.toFixed(4),
           'Student Percentile': studentPercentile.toFixed(4),
           Diff: r.diff?.toFixed(4),
+          Volatility: r.highVolatility ? 'High' : 'Stable',
+          'Choice Code': r.choice_code || '',
         })
       })
     }
@@ -112,14 +150,39 @@ export default function PredictionEngine({ profile, records, cities, branches, o
     XLSX.writeFile(wb, `${profile.name}_MHT_CET_Predictions.xlsx`)
   }, [dreamRows, targetRows, safeRows, studentPercentile, profile.name])
 
+  const handlePDF = async () => {
+    setExporting(true)
+    try {
+      await generateParentSummaryPDF(profile, dreamRows, targetRows, safeRows)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const toggleSeat = (s: string) => {
     setSelectedSeatTypes((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]))
   }
-  const toggleCity = (c: string) => {
-    setSelectedCities((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
+
+  const resetFilters = () => {
+    setSelectedCity('')
+    setSelectedCollege('')
+    setSelectedBranch('')
+    setSelectedBranches([])
+    setSelectedSeatTypes(profile.seat_types || [])
+    setOffset(0)
   }
-  const toggleBranch = (b: string) => {
-    setSelectedBranches((prev) => (prev.includes(b) ? prev.filter((x) => x !== b) : [...prev, b]))
+
+  const applyCluster = (clusterName: string) => {
+    const clusterBranches = BRANCH_CLUSTERS[clusterName] || []
+    setSelectedBranches((prev) => {
+      const next = new Set(prev)
+      for (const b of clusterBranches) {
+        if (availableBranches.includes(b)) next.add(b)
+      }
+      return Array.from(next)
+    })
   }
 
   const TierBadge = ({ tier }: { tier: string }) => {
@@ -149,26 +212,27 @@ export default function PredictionEngine({ profile, records, cities, branches, o
                   <th className="text-left px-4 py-3 font-medium text-gray-600 dark:text-gray-300">College</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600 dark:text-gray-300">City</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600 dark:text-gray-300">Branch</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600 dark:text-gray-300">Seat Type</th>
-                  <th className="text-right px-4 py-3 font-medium text-gray-600 dark:text-gray-300">Avg Cutoff</th>
+                  <th className="text-left px-4 py-3 font-medium text-gray-600 dark:text-gray-300">Seat</th>
+                  <th className="text-right px-4 py-3 font-medium text-gray-600 dark:text-gray-300">Avg</th>
                   <th className="text-right px-4 py-3 font-medium text-gray-600 dark:text-gray-300">Diff</th>
                   <th className="text-center px-4 py-3 font-medium text-gray-600 dark:text-gray-300">Trend</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {rows.map((row) => {
-                  const isOpen = expandedRow === `${row.collegeCode}-${row.branch}-${row.seatType}`
+                  const key = `${row.college_code}-${row.branch_name}-${row.seat_type}`
+                  const isOpen = expandedRow === key
                   return (
-                    <Fragment key={`${row.collegeCode}-${row.branch}-${row.seatType}`}>
+                    <Fragment key={key}>
                       <tr
                         className="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
-                        onClick={() => setExpandedRow(isOpen ? null : `${row.collegeCode}-${row.branch}-${row.seatType}`)}
+                        onClick={() => setExpandedRow(isOpen ? null : key)}
                       >
                         <td className="px-4 py-3"><TierBadge tier={row.tier} /></td>
-                        <td className="px-4 py-3 font-medium max-w-xs truncate">{row.collegeName}</td>
+                        <td className="px-4 py-3 font-medium max-w-xs truncate">{row.college_name}</td>
                         <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{row.city}</td>
-                        <td className="px-4 py-3">{row.branch}</td>
-                        <td className="px-4 py-3"><span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-full">{row.seatType}</span></td>
+                        <td className="px-4 py-3">{row.branch_name}</td>
+                        <td className="px-4 py-3"><span className="text-xs px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded-full">{row.seat_type}</span></td>
                         <td className="px-4 py-3 text-right font-semibold">{row.avgCutoff?.toFixed(2)}</td>
                         <td className="px-4 py-3 text-right">
                           <span className={row.diff! > 0 ? 'text-emerald-600' : 'text-rose-600'}>
@@ -183,8 +247,15 @@ export default function PredictionEngine({ profile, records, cities, branches, o
                         <tr>
                           <td colSpan={8} className="px-4 py-4 bg-gray-50 dark:bg-gray-700/30">
                             <div className="mb-2">
-                              <h4 className="text-sm font-semibold mb-1">{row.collegeName} — {row.branch}</h4>
-                              <p className="text-xs text-gray-500 mb-3">Historical cutoff trajectory (Student percentile: {studentPercentile.toFixed(2)}%)</p>
+                              <h4 className="text-sm font-semibold mb-1">{row.college_name} — {row.branch_name}</h4>
+                              <div className="flex items-center gap-2 mb-1">
+                                <p className="text-xs text-gray-500">Historical cutoff trajectory (Student percentile: {studentPercentile.toFixed(2)}%)</p>
+                                {row.highVolatility && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 rounded-full text-[10px] font-medium">
+                                    <Activity className="w-3 h-3" /> High YoY Volatility
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <TrendChart row={row} studentPercentile={studentPercentile} />
                             <div className="grid grid-cols-4 gap-2 mt-3 text-center">
@@ -205,6 +276,17 @@ export default function PredictionEngine({ profile, records, cities, branches, o
                                 <p className="text-sm font-semibold">{row.cutoff2025?.toFixed(2) ?? '-'}</p>
                               </div>
                             </div>
+                            <div className="mt-3 flex items-center gap-2">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setModalRow(row) }}
+                                className="px-3 py-1.5 bg-primary-600 text-white rounded-lg text-xs font-medium hover:bg-primary-700"
+                              >
+                                View Full Analytics
+                              </button>
+                              {row.choice_code && (
+                                <span className="text-[10px] text-gray-500">Choice Code: {row.choice_code}</span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       )}
@@ -220,7 +302,7 @@ export default function PredictionEngine({ profile, records, cities, branches, o
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" id="prediction-root">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500">
@@ -248,81 +330,121 @@ export default function PredictionEngine({ profile, records, cities, branches, o
             <Download className="w-4 h-4" />
             Export Excel
           </button>
+          <button
+            onClick={handlePDF}
+            disabled={exporting}
+            className="flex items-center gap-2 px-3 py-2 bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors disabled:opacity-50"
+          >
+            <FileText className="w-4 h-4" />
+            Export PDF
+          </button>
         </div>
       </div>
 
       {showFilters && (
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+              <label className="block text-sm font-semibold mb-1">City</label>
+              <select
+                value={selectedCity}
+                onChange={(e) => { setSelectedCity(e.target.value); setSelectedCollege(''); }}
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="">All Cities</option>
+                {cities.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold mb-1">College Name</label>
+              <select
+                value={selectedCollege}
+                onChange={(e) => { setSelectedCollege(e.target.value); setSelectedBranch(''); }}
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="">All Colleges</option>
+                {availableColleges.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold mb-1">Branch Name</label>
+              <select
+                value={selectedBranch}
+                onChange={(e) => { setSelectedBranch(e.target.value); setSelectedBranches(e.target.value ? [e.target.value] : []) }}
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="">All Branches</option>
+                {availableBranches.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold mb-1">Seat Type</label>
+              <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
+                {['AI', 'GOPENS', 'LOPENS', 'GOBCS', 'LOBCS', 'GSCS', 'LSCS', 'EWS', 'TFWS', 'MI'].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => toggleSeat(s)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${selectedSeatTypes.includes(s) ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
           <div>
-            <label className="block text-sm font-semibold mb-2">Seat Types</label>
-            <div className="space-y-3">
-              {Object.entries(SEAT_TYPES).map(([group, types]) => (
-                <div key={group}>
-                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">{group}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {types.map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => toggleSeat(s)}
-                        className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${selectedSeatTypes.includes(s) ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+            <label className="block text-sm font-semibold mb-2">Branch Super-Clusters</label>
+            <div className="flex flex-wrap gap-2">
+              {Object.keys(BRANCH_CLUSTERS).map((cluster) => (
+                <button
+                  key={cluster}
+                  onClick={() => applyCluster(cluster)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors"
+                >
+                  {cluster === 'CS / IT / Tech' ? <Cpu className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
+                  {cluster}
+                </button>
               ))}
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-semibold mb-2">Cities</label>
-              <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
-                {cities.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => toggleCity(c)}
-                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${selectedCities.includes(c) ? 'bg-green-600 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                  >
-                    {c}
-                  </button>
-                ))}
+          <div className="flex items-center gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-semibold mb-1">
+                Inflation / Deflation Offset: {offset > 0 ? '+' : ''}{offset.toFixed(1)}%
+              </label>
+              <input
+                type="range"
+                min={-1}
+                max={1}
+                step={0.1}
+                value={offset}
+                onChange={(e) => setOffset(parseFloat(e.target.value))}
+                className="w-full accent-primary-600"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>-1.0% (Easier)</span>
+                <span>0.0%</span>
+                <span>+1.0% (Harder)</span>
               </div>
             </div>
-            <div>
-              <label className="block text-sm font-semibold mb-2">Branches</label>
-              <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
-                {branches.map((b) => (
-                  <button
-                    key={b}
-                    onClick={() => toggleBranch(b)}
-                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${selectedBranches.includes(b) ? 'bg-amber-600 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
-                  >
-                    {b}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <button
+              onClick={resetFilters}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Reset Filters
+            </button>
           </div>
-          <div>
-            <label className="block text-sm font-semibold mb-2">
-              Inflation / Deflation Offset: {offset > 0 ? '+' : ''}{offset.toFixed(1)}%
-            </label>
-            <input
-              type="range"
-              min={-3}
-              max={3}
-              step={0.1}
-              value={offset}
-              onChange={(e) => setOffset(parseFloat(e.target.value))}
-              className="w-full accent-primary-600"
-            />
-            <div className="flex justify-between text-xs text-gray-500 mt-1">
-              <span>-3.0% (Easier)</span>
-              <span>0.0%</span>
-              <span>+3.0% (Harder)</span>
+          {selectedBranches.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {selectedBranches.map((b) => (
+                <span key={b} className="inline-flex items-center gap-1 px-2 py-0.5 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 rounded-full text-xs">
+                  {b}
+                  <button onClick={() => setSelectedBranches((prev) => prev.filter((x) => x !== b))} className="hover:text-red-500">×</button>
+                </span>
+              ))}
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -334,8 +456,8 @@ export default function PredictionEngine({ profile, records, cities, branches, o
             </label>
             <input
               type="range"
-              min={-3}
-              max={3}
+              min={-1}
+              max={1}
               step={0.1}
               value={offset}
               onChange={(e) => setOffset(parseFloat(e.target.value))}
@@ -368,6 +490,59 @@ export default function PredictionEngine({ profile, records, cities, branches, o
       {grouped.length === 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-10 text-center">
           <p className="text-gray-500 dark:text-gray-400">No results match the current filters. Try adjusting seat types, cities, or branches.</p>
+        </div>
+      )}
+
+      {modalRow && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold">{modalRow.college_name}</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{modalRow.branch_name} — {modalRow.seat_type}</p>
+              </div>
+              <button onClick={() => setModalRow(null)} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="mb-4">
+              <TrendChart row={modalRow} studentPercentile={studentPercentile} />
+            </div>
+            <div className="grid grid-cols-4 gap-2 text-center mb-4">
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg px-2 py-2">
+                <p className="text-[10px] text-gray-500">2022</p>
+                <p className="text-sm font-semibold">{modalRow.cutoff2022?.toFixed(2) ?? '-'}</p>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg px-2 py-2">
+                <p className="text-[10px] text-gray-500">2023</p>
+                <p className="text-sm font-semibold">{modalRow.cutoff2023?.toFixed(2) ?? '-'}</p>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg px-2 py-2">
+                <p className="text-[10px] text-gray-500">2024</p>
+                <p className="text-sm font-semibold">{modalRow.cutoff2024?.toFixed(2) ?? '-'}</p>
+              </div>
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg px-2 py-2">
+                <p className="text-[10px] text-gray-500">2025</p>
+                <p className="text-sm font-semibold">{modalRow.cutoff2025?.toFixed(2) ?? '-'}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 text-sm">
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 rounded-full text-xs font-medium">
+                <Activity className="w-3 h-3" /> YoY Volatility: {modalRow.volatility.toFixed(2)}%
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-xs text-gray-600 dark:text-gray-400">
+                Avg Cutoff: {modalRow.avgCutoff?.toFixed(2)}%
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-xs text-gray-600 dark:text-gray-400">
+                Diff: {modalRow.diff?.toFixed(2)}%
+              </span>
+              {modalRow.choice_code && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-xs text-gray-600 dark:text-gray-400">
+                  Choice Code: {modalRow.choice_code}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

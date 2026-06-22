@@ -1,15 +1,15 @@
 export interface CutoffRecord {
-  Year: string;
-  College_Code: string;
-  College_Name: string;
-  City: string;
-  Branch: string;
-  Seat_Type: string;
-  Cutoff_Percentile: number;
-  CAP_Round: string;
-  Exam_Type: string;
-  Choice_Code: string;
-  Merit_No: string;
+  year: number;
+  college_code: string;
+  college_name: string;
+  city: string;
+  branch_name: string;
+  seat_type: string;
+  cutoff_percentile: number;
+  cap_round?: string;
+  exam_type?: string;
+  choice_code?: string;
+  merit_no?: string;
 }
 
 export interface StudentProfile {
@@ -26,12 +26,12 @@ export interface StudentProfile {
 }
 
 export interface PredictionRow {
-  collegeCode: string;
-  collegeName: string;
+  college_code: string;
+  college_name: string;
   city: string;
-  branch: string;
-  seatType: string;
-  examType: string;
+  branch_name: string;
+  seat_type: string;
+  exam_type: string;
   cutoff2022: number | null;
   cutoff2023: number | null;
   cutoff2024: number | null;
@@ -40,6 +40,9 @@ export interface PredictionRow {
   avgCutoff: number | null;
   diff: number | null;
   tier: 'dream' | 'target' | 'safe';
+  volatility: number;
+  highVolatility: boolean;
+  choice_code?: string;
 }
 
 export const SEAT_TYPES = {
@@ -57,3 +60,35 @@ export const ALL_SEAT_TYPES = Object.values(SEAT_TYPES).flat();
 export const HOME_UNIVERSITIES = [
   'SPPU', 'MU', 'BATU', 'SGBAU', 'RTMNU', 'BAMU', 'SNDT', 'Other'
 ];
+
+export const BRANCH_CLUSTERS: Record<string, string[]> = {
+  'CS / IT / Tech': [
+    'Computer Engineering',
+    'Computer Science and Engineering',
+    'CSE',
+    'Information Technology',
+    'IT',
+    'Artificial Intelligence and Data Science',
+    'AI & Data Science',
+    'Artificial Intelligence and Machine Learning',
+    'AIML',
+    'Data Science',
+    'Cyber Security',
+  ],
+  'Core Circuit': [
+    'Electronics and Telecommunication Engineering',
+    'Electronics & Telecommunication',
+    'EnTC',
+    'Electronics Engineering',
+    'Electronics',
+    'Electrical Engineering',
+    'Electrical',
+  ],
+};
+
+export const BRANCH_CLUSTER_MAP = new Map<string, string>();
+for (const [cluster, branches] of Object.entries(BRANCH_CLUSTERS)) {
+  for (const b of branches) {
+    BRANCH_CLUSTER_MAP.set(b, cluster);
+  }
+}
