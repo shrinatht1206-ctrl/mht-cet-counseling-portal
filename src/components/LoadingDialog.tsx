@@ -4,10 +4,9 @@ import { Loader as Loader2, Database } from 'lucide-react';
 interface Props {
   progress: number;
   total: number;
-  label?: string;
 }
 
-export function LoadingDialog({ progress, total, label }: Props) {
+export function LoadingDialog({ progress, total }: Props) {
   const [visible, setVisible] = useState(true);
   const pct = Math.round((progress / total) * 100);
 
@@ -32,7 +31,7 @@ export function LoadingDialog({ progress, total, label }: Props) {
               Mounting Admission Database
             </h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              {label || `Ingesting file ${Math.min(progress, total)} of ${total}...`}
+              Ingesting file {Math.min(progress, total)} of {total}...
             </p>
           </div>
         </div>
