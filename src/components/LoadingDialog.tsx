@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Database } from 'lucide-react';
+import { Loader as Loader2, Database } from 'lucide-react';
 
 interface Props {
   progress: number;

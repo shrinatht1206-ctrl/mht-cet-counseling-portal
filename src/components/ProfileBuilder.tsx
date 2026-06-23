@@ -1,6 +1,6 @@
 import { StudentProfile, CategoryKey } from '../types';
 import { CATEGORY_LABELS } from '../utils/categories';
-import { User, GraduationCap, Home, Percent, ChevronDown } from 'lucide-react';
+import { User, GraduationCap, Chrome as Home, Percent, ChevronDown } from 'lucide-react';
 
 interface Props {
   profile: StudentProfile;

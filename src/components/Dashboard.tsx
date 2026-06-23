@@ -4,10 +4,7 @@ import { TrendChartModal } from './TrendChartModal';
 import { getCategoryColor } from '../utils/categories';
 import { isInCluster } from '../utils/branches';
 import { exportToExcel, exportToPDF } from '../utils/export';
-import {
-  TrendingUp, FileSpreadsheet, FileText, AlertTriangle,
-  ChevronDown, ChevronUp, Sparkles, Target, ShieldCheck
-} from 'lucide-react';
+import { TrendingUp, FileSpreadsheet, FileText, TriangleAlert as AlertTriangle, ChevronDown, ChevronUp, Sparkles, Target, ShieldCheck } from 'lucide-react';
 
 interface Props {
   results: ForecastResult[];
