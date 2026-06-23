@@ -1,100 +1,144 @@
-import { useState } from 'react'
-import { useTheme } from './hooks/useTheme'
-import { useCutoffData } from './hooks/useCutoffData'
-import { StudentProfile } from './types'
-import Header from './components/Header'
-import ProfileManager from './components/ProfileManager'
-import ProfileForm from './components/ProfileForm'
-import PredictionEngine from './components/PredictionEngine'
-import { GraduationCap } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react';
+import { DataRow, StudentProfile, FilterState, ForecastResult } from './types';
+import { useTheme } from './hooks/useTheme';
+import { ingestData } from './utils/ingestion';
+import { buildForecast } from './utils/forecasting';
+import { LoadingDialog } from './components/LoadingDialog';
+import { ProfileBuilder } from './components/ProfileBuilder';
+import { FilterPanel } from './components/FilterPanel';
+import { Dashboard } from './components/Dashboard';
+import { Sun, Moon, GraduationCap } from 'lucide-react';
 
-export default function App() {
-  const { dark, toggle } = useTheme()
-  const { records, cities, branches, loading, error } = useCutoffData()
-  const [view, setView] = useState<'profiles' | 'predictions' | 'edit'>('profiles')
-  const [selectedProfile, setSelectedProfile] = useState<StudentProfile | null>(null)
-  const [editingProfile, setEditingProfile] = useState<StudentProfile | null>(null)
+function App() {
+  const { dark, toggle } = useTheme();
+  const [data, setData] = useState<DataRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSelect = (p: StudentProfile) => {
-    setSelectedProfile(p)
-    setView('predictions')
-  }
+  const [profile, setProfile] = useState<StudentProfile>({
+    name: '',
+    mhtCetPercentile: 0,
+    jeePercentile: 0,
+    homeUniversity: '',
+    category: 'Open',
+  });
 
-  const handleEdit = (p: StudentProfile) => {
-    setEditingProfile(p)
-    setView('edit')
-  }
+  const [filters, setFilters] = useState<FilterState>({
+    city: '',
+    college: '',
+    branch: '',
+    search: '',
+  });
 
-  const handleNew = () => {
-    setEditingProfile(null)
-    setView('edit')
-  }
+  const [selectedClusters, setSelectedClusters] = useState<string[]>([]);
+  const [inflation, setInflation] = useState(0);
 
-  const handleSaved = (_p: StudentProfile) => {
-    setView('profiles')
-    setEditingProfile(null)
-  }
+  const [results, setResults] = useState<ForecastResult[]>([]);
 
-  const handleBack = () => {
-    setView('profiles')
-    setSelectedProfile(null)
-    setEditingProfile(null)
-  }
+  useEffect(() => {
+    let mounted = true;
+    ingestData((current) => {
+      if (mounted) setProgress(current);
+    })
+      .then(rows => {
+        if (!mounted) return;
+        setData(rows);
+        setLoading(false);
+        setProgress(10);
+      })
+      .catch(err => {
+        if (!mounted) return;
+        setError(err.message);
+        setLoading(false);
+      });
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (data.length === 0) return;
+    const forecast = buildForecast(data, profile, profile.category, inflation);
+    setResults(forecast);
+  }, [data, profile, inflation]);
+
+  const handleClusterToggle = useCallback((key: string) => {
+    setSelectedClusters(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  }, []);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors">
-      <Header dark={dark} toggle={toggle} />
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {view === 'profiles' && (
-          <ProfileManager
-            onSelect={handleSelect}
-            onEdit={handleEdit}
-            onNew={handleNew}
-            selectedProfile={selectedProfile}
-          />
-        )}
-        {view === 'edit' && (
-          <ProfileForm
-            profile={editingProfile}
-            cities={cities}
-            branches={branches}
-            onSaved={handleSaved}
-            onCancel={handleBack}
-          />
-        )}
-        {view === 'predictions' && selectedProfile && (
-          <PredictionEngine
-            profile={selectedProfile}
-            records={records}
-            cities={cities}
-            branches={branches}
-            onBack={handleBack}
-          />
-        )}
-      </main>
-      {loading && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl px-8 py-6 flex items-center gap-3 shadow-2xl">
-            <div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm font-medium">Loading MHT-CET dataset...</span>
-          </div>
-        </div>
-      )}
-      {error && !loading && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl px-8 py-6 text-center shadow-2xl max-w-md">
-            <GraduationCap className="w-10 h-10 mx-auto text-red-500 mb-3" />
-            <h3 className="text-lg font-semibold mb-2">Failed to load data</h3>
-            <p className="text-sm text-gray-500 mb-4">{error}</p>
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-950 text-gray-900 dark:text-white transition-colors">
+      {loading && <LoadingDialog progress={progress} total={10} />}
+
+      <header className="sticky top-0 z-40 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-gray-200 dark:border-slate-700">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-blue-600">
+                <GraduationCap className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h1 className="text-base font-bold text-gray-900 dark:text-white leading-tight">
+                  MHT-CET 2026
+                </h1>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Admission Forecasting & Counseling</p>
+              </div>
+            </div>
             <button
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"
+              onClick={toggle}
+              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800 transition"
+              aria-label="Toggle theme"
             >
-              Retry
+              {dark ? (
+                <Sun className="w-5 h-5 text-amber-400" />
+              ) : (
+                <Moon className="w-5 h-5 text-slate-600" />
+              )}
             </button>
           </div>
         </div>
-      )}
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {error && (
+          <div className="rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 p-4 text-red-700 dark:text-red-300">
+            <p className="font-medium">Failed to load data</p>
+            <p className="text-sm">{error}</p>
+          </div>
+        )}
+
+        {!error && data.length === 0 && !loading && (
+          <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-4 text-amber-700 dark:text-amber-300">
+            No data loaded. Please check that the data files exist in the /public directory.
+          </div>
+        )}
+
+        {data.length > 0 && (
+          <>
+            <ProfileBuilder profile={profile} onChange={setProfile} />
+
+            <FilterPanel
+              filters={filters}
+              onChange={setFilters}
+              data={data}
+              selectedClusters={selectedClusters}
+              onClusterToggle={handleClusterToggle}
+            />
+
+            <Dashboard
+              results={results}
+              filters={filters}
+              profile={profile}
+              selectedClusters={selectedClusters}
+              inflation={inflation}
+              onInflationChange={setInflation}
+            />
+          </>
+        )}
+      </main>
     </div>
-  )
+  );
 }
+
+export default App;
